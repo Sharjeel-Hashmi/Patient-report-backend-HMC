@@ -5,10 +5,13 @@ const auth = require("../middleware/auth");
 const router = express.Router();
 
 // @route  GET /api/patients
-// Supports: ?search=name & ?dob=YYYY-MM-DD & ?reportDate=YYYY-MM-DD
+// Supports: ?search=name & ?dob=YYYY-MM-DD & ?reportDate=YYYY-MM-DD & ?page=1 & ?limit=10
 router.get("/", auth, async (req, res) => {
   try {
     const { search, dob, reportDate } = req.query;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.max(1, parseInt(req.query.limit, 10) || 10);
+
     let query = {};
 
     if (search) {
@@ -32,7 +35,18 @@ router.get("/", auth, async (req, res) => {
       );
     }
 
-    res.json(patients);
+    const totalCount = patients.length;
+    const totalPages = Math.max(1, Math.ceil(totalCount / limit));
+    const startIndex = (page - 1) * limit;
+    const paginatedPatients = patients.slice(startIndex, startIndex + limit);
+
+    res.json({
+      patients: paginatedPatients,
+      totalCount,
+      totalPages,
+      currentPage: page,
+      limit,
+    });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
