@@ -6,12 +6,32 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-const generateToken = (user) => {
+const ACCESS_TOKEN_EXPIRY = "1h";
+const REFRESH_TOKEN_EXPIRY = "30d";
+
+const generateAccessToken = (user) => {
   return jwt.sign(
-    { id: user._id, email: user.email, name: user.name },
+    { id: user._id, email: user.email, name: user.name, type: "access" },
     process.env.JWT_SECRET,
-    { expiresIn: "7d" }
+    { expiresIn: ACCESS_TOKEN_EXPIRY }
   );
+};
+
+const generateRefreshToken = (user) => {
+  return jwt.sign({ id: user._id, type: "refresh" }, process.env.JWT_SECRET, {
+    expiresIn: REFRESH_TOKEN_EXPIRY,
+  });
+};
+
+// Issues a fresh access+refresh pair for a user and stores the refresh token's
+// hash on the user document (so it can be verified/revoked later).
+const issueTokenPair = async (user) => {
+  const accessToken = generateAccessToken(user);
+  const refreshToken = generateRefreshToken(user);
+  const salt = await bcrypt.genSalt(10);
+  user.refreshTokenHash = await bcrypt.hash(refreshToken, salt);
+  await user.save();
+  return { accessToken, refreshToken };
 };
 
 // @route  POST /api/auth/signup
@@ -32,9 +52,10 @@ router.post("/signup", async (req, res) => {
 
     const user = await User.create({ name, email: email.toLowerCase(), password: hashedPassword });
 
-    const token = generateToken(user);
+    const { accessToken, refreshToken } = await issueTokenPair(user);
     res.status(201).json({
-      token,
+      accessToken,
+      refreshToken,
       user: { id: user._id, name: user.name, email: user.email },
     });
   } catch (err) {
@@ -60,11 +81,71 @@ router.post("/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid email or password" });
     }
 
-    const token = generateToken(user);
+    const { accessToken, refreshToken } = await issueTokenPair(user);
     res.json({
-      token,
+      accessToken,
+      refreshToken,
       user: { id: user._id, name: user.name, email: user.email },
     });
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// @route  POST /api/auth/refresh
+// Body: { refreshToken }. Verifies the refresh token, rotates it (issues a brand
+// new refresh token each time), and returns a fresh access token. Used silently
+// by the frontend whenever an access token expires.
+router.post("/refresh", async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (!refreshToken) {
+      return res.status(400).json({ message: "Refresh token is required" });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ message: "Session expired, please log in again" });
+    }
+
+    if (decoded.type !== "refresh") {
+      return res.status(401).json({ message: "Invalid token type" });
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user || !user.refreshTokenHash) {
+      return res.status(401).json({ message: "Session expired, please log in again" });
+    }
+
+    const isValid = await bcrypt.compare(refreshToken, user.refreshTokenHash);
+    if (!isValid) {
+      return res.status(401).json({ message: "Session expired, please log in again" });
+    }
+
+    const tokens = await issueTokenPair(user);
+    res.json(tokens);
+  } catch (err) {
+    res.status(500).json({ message: "Server error", error: err.message });
+  }
+});
+
+// @route  POST /api/auth/logout
+// Body: { refreshToken }. Revokes the refresh token server-side so it can't be
+// used again even if someone still has a copy of it.
+router.post("/logout", async (req, res) => {
+  try {
+    const { refreshToken } = req.body;
+    if (refreshToken) {
+      try {
+        const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
+        await User.findByIdAndUpdate(decoded.id, { refreshTokenHash: null });
+      } catch {
+        // Token already invalid/expired — nothing to revoke, that's fine.
+      }
+    }
+    res.json({ message: "Logged out" });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -73,7 +154,7 @@ router.post("/login", async (req, res) => {
 // @route  GET /api/auth/me
 router.get("/me", auth, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select("-password");
+    const user = await User.findById(req.user.id).select("-password -refreshTokenHash");
     if (!user) return res.status(404).json({ message: "User not found" });
     res.json(user);
   } catch (err) {
@@ -97,8 +178,13 @@ router.put("/change-email", auth, async (req, res) => {
     user.email = newEmail.toLowerCase();
     await user.save();
 
-    const token = generateToken(user);
-    res.json({ message: "Email updated successfully", token, user: { id: user._id, name: user.name, email: user.email } });
+    const { accessToken, refreshToken } = await issueTokenPair(user);
+    res.json({
+      message: "Email updated successfully",
+      accessToken,
+      refreshToken,
+      user: { id: user._id, name: user.name, email: user.email },
+    });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }
@@ -118,7 +204,10 @@ router.put("/change-password", auth, async (req, res) => {
     user.password = await bcrypt.hash(newPassword, salt);
     await user.save();
 
-    res.json({ message: "Password updated successfully" });
+    // Rotates the refresh token too — any other lingering session gets logged out,
+    // while this session keeps working with the newly issued pair below.
+    const { accessToken, refreshToken } = await issueTokenPair(user);
+    res.json({ message: "Password updated successfully", accessToken, refreshToken });
   } catch (err) {
     res.status(500).json({ message: "Server error", error: err.message });
   }

@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     password: { type: String, required: true },
     role: { type: String, enum: ["admin"], default: "admin" },
+    refreshTokenHash: { type: String, default: null }, // bcrypt hash of the current valid refresh token
   },
   { timestamps: true }
 );
