@@ -17,11 +17,13 @@ async function buildConsultationPayload(body) {
     condition,
     date,
     chiefComplaint,
-    currentlyTaking,
+    currentlyTakingMeds,
     feeling,
     sssScore,
-    linkedReport,
+    linkedReports,
+    thyroidUSDone,
     ultrasoundNotes,
+    referForThyroidUS,
     allergy,
     currentMedicines,
     bp,
@@ -62,6 +64,27 @@ async function buildConsultationPayload(body) {
     );
   }
 
+  // "Currently taking" — multi-select of medications, same snapshot pattern as prescriptions.
+  let resolvedCurrentlyTakingMeds = [];
+  if (Array.isArray(currentlyTakingMeds)) {
+    resolvedCurrentlyTakingMeds = await Promise.all(
+      currentlyTakingMeds
+        .filter((m) => m) // accepts either an id string or { medication: id }
+        .map(async (m) => {
+          const medId = typeof m === "string" ? m : m.medication;
+          if (!medId) return null;
+          const medDoc = await Medication.findById(medId);
+          return { medication: medId, medicationName: medDoc ? medDoc.name : "" };
+        })
+    );
+    resolvedCurrentlyTakingMeds = resolvedCurrentlyTakingMeds.filter(Boolean);
+  }
+
+  // Linked blood test report(s) — 1 = single view, 2 = comparison view.
+  const resolvedLinkedReports = Array.isArray(linkedReports)
+    ? linkedReports.filter(Boolean).slice(0, 2)
+    : [];
+
   return {
     visitType: visitTypeDoc._id,
     visitTypeName: visitTypeDoc.name,
@@ -69,11 +92,13 @@ async function buildConsultationPayload(body) {
     conditionName: conditionDoc.name,
     date,
     chiefComplaint,
-    currentlyTaking,
+    currentlyTakingMeds: resolvedCurrentlyTakingMeds,
     feeling,
     sssScore: sssScore === "" || sssScore === undefined ? undefined : Number(sssScore),
-    linkedReport: linkedReport || null,
+    linkedReports: resolvedLinkedReports,
+    thyroidUSDone,
     ultrasoundNotes,
+    referForThyroidUS,
     allergy,
     currentMedicines,
     bp,
