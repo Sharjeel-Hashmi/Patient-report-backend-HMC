@@ -1,5 +1,6 @@
 const express = require("express");
 const Patient = require("../models/Patient");
+const Consultation = require("../models/Consultation");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
@@ -40,8 +41,27 @@ router.get("/", auth, async (req, res) => {
     const startIndex = (page - 1) * limit;
     const paginatedPatients = patients.slice(startIndex, startIndex + limit);
 
+    // Consultation count + last consultation date for just this page of patients
+    const patientIds = paginatedPatients.map((p) => p._id);
+    const consultationStats = await Consultation.aggregate([
+      { $match: { patient: { $in: patientIds } } },
+      { $group: { _id: "$patient", count: { $sum: 1 }, lastDate: { $max: "$date" } } },
+    ]);
+    const statsMap = {};
+    consultationStats.forEach((cs) => {
+      statsMap[cs._id.toString()] = { count: cs.count, lastDate: cs.lastDate };
+    });
+
+    const patientsWithConsultations = paginatedPatients.map((p) => {
+      const obj = p.toObject();
+      const cs = statsMap[p._id.toString()];
+      obj.consultationsCount = cs ? cs.count : 0;
+      obj.lastConsultationDate = cs ? cs.lastDate : null;
+      return obj;
+    });
+
     res.json({
-      patients: paginatedPatients,
+      patients: patientsWithConsultations,
       totalCount,
       totalPages,
       currentPage: page,

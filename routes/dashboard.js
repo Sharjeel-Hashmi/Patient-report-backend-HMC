@@ -1,5 +1,6 @@
 const express = require("express");
 const Patient = require("../models/Patient");
+const Consultation = require("../models/Consultation");
 const auth = require("../middleware/auth");
 
 const router = express.Router();
@@ -100,11 +101,18 @@ router.get("/", auth, async (req, res) => {
 
     const mostCommonEntry = Object.entries(abnormalityCounts).sort((a, b) => b[1] - a[1])[0];
 
+    const [totalConsultations, consultationsThisMonth] = await Promise.all([
+      Consultation.countDocuments(),
+      Consultation.countDocuments({ date: { $gte: monthStart } }),
+    ]);
+
     res.json({
       totalPatients: patients.length,
       totalReports,
+      totalConsultations,
       newPatientsThisMonth,
       reportsThisMonth,
+      consultationsThisMonth,
       followUpDue: followUpDue.sort((a, b) => new Date(a.lastReportDate) - new Date(b.lastReportDate)),
       abnormalAlerts,
       genderSplit,
