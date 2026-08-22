@@ -16,7 +16,24 @@ const app = express();
 
 connectDB();
 
-app.use(cors({ origin: process.env.CLIENT_URL || "*" }));
+const allowedOrigins = [
+  process.env.CLIENT_URL,
+  "http://localhost:5173",
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // allow requests with no origin (like Postman/curl)
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {
